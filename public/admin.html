@@ -5,111 +5,127 @@
   <style>
     body { font-family: sans-serif; padding: 20px; }
     section { margin-bottom: 2rem; }
+    input, button { margin: 5px; padding: 5px; }
   </style>
 </head>
 <body>
-  <h2>🏥 Hospital Admin Dashboard</h2>
-  <button onclick="logout()">Logout</button>
+  <h2>🏥 ABC Hospital – Admin Dashboard</h2>
 
   <section>
-    <h3>Hospital Info</h3>
-    <div id="hospitalInfo">Loading...</div>
-  </section>
-
-  <section>
-    <h3>Add Available Doctor</h3>
+    <h3>Add Doctor</h3>
     <form id="addDoctorForm">
       <input name="name" placeholder="Doctor Name" required />
       <input name="specialization" placeholder="Specialization" required />
+      <input name="schedule" placeholder="Schedule (comma-separated)" required />
       <button type="submit">Add Doctor</button>
     </form>
+  </section>
+
+  <section>
+    <h3>Doctors & Queues</h3>
     <ul id="doctorList"></ul>
   </section>
 
   <section>
-    <h3>Set Queue & Schedule</h3>
-    <form id="scheduleForm">
-      <select id="doctorSelect"></select><br>
-      <input name="time" placeholder="Time Slot (e.g., 2025-06-26T11:00)" required /><br>
-      <button type="submit">Set Schedule</button>
-    </form>
+    <h3>🧾 Patient History (Admitted)</h3>
+    <ul id="patientHistoryList"></ul>
   </section>
 
   <script>
-    const token = localStorage.getItem('token');
-    if (!token) {
-      alert('No token found, redirecting to login.');
-      window.location.href = '/admin/login';
-    }
-
-    function authHeaders() {
-      return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
-    }
-
-    async function loadHospitalInfo() {
-      const res = await fetch('/hospital-info', { headers: authHeaders() });
-      const data = await res.json();
-      document.getElementById('hospitalInfo').innerText =
-        `${data.name}, ${data.location}, ${data.contact}`;
-    }
-
     async function loadDoctors() {
-      const res = await fetch('/api/doctors', { headers: authHeaders() });
-      const doctors = await res.json();
-      const list = document.getElementById('doctorList');
-      const select = document.getElementById('doctorSelect');
+  const res = await fetch('/api/admin/doctors');
+  const { doctors } = await res.json();
+  const list = document.getElementById('doctorList');
+
+  // Save scroll position (optional)
+  const scrollPos = list.scrollTop;
+
+  // Clear and rebuild the list (with less flicker)
+  const fragment = document.createDocumentFragment();
+
+  for (const doc of doctors) {
+    const q = await fetch(`/api/doctors/${doc._id}/queue`);
+    const { queue } = await q.json();
+
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <b>${doc.name}</b> (${doc.specialization}) – 
+      <i>${doc.active ? '✅ Active' : '❌ Not Active'}</i><br>
+      Schedule: ${doc.schedule.join(', ') || 'None'}<br>
+      Queue (${queue.length}):<br>
+      <ul>
+        ${queue.map(p => `
+          <li>${p.name} (${p.gender}, ${p.reason}, Age: ${p.age}, From: ${p.location})</li>
+        `).join('')}
+      </ul>
+      <button onclick="nextPatient('${doc._id}')">Next Patient</button>
+      <button onclick="toggleStatus('${doc._id}')">
+        Set ${doc.active ? 'Inactive' : 'Active'}
+      </button><br><br>
+    `;
+    fragment.appendChild(li);
+  }
+
+  list.innerHTML = '';
+  list.appendChild(fragment);
+
+  // Restore scroll (optional)
+  list.scrollTop = scrollPos;
+}
+
+    async function loadPatientHistory() {
+      const res = await fetch('/api/admin/patients');
+      const { patients } = await res.json();
+      const list = document.getElementById('patientHistoryList');
       list.innerHTML = '';
-      select.innerHTML = '';
 
-      doctors.forEach(doc => {
+      patients.forEach(p => {
         const li = document.createElement('li');
-        li.textContent = `${doc.name} (${doc.specialization})`;
+        li.textContent = `${p.name} (${p.gender}, ${p.reason}) - Age ${p.age} from ${p.location} - Doctor: ${p.doctorId?.name || 'Unknown'} on ${new Date(p.visitedAt).toLocaleString()}`;
         list.appendChild(li);
-
-        const opt = document.createElement('option');
-        opt.value = doc.id;
-        opt.textContent = doc.name;
-        select.appendChild(opt);
       });
     }
 
     document.getElementById('addDoctorForm').onsubmit = async (e) => {
       e.preventDefault();
-      const form = new FormData(e.target);
+      const f = new FormData(e.target);
+      const body = {
+        name: f.get('name'),
+        specialization: f.get('specialization'),
+        schedule: f.get('schedule').split(',').map(s => s.trim())
+      };
+
       await fetch('/api/doctors', {
         method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          name: form.get('name'),
-          specialization: form.get('specialization'),
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
       });
+
       e.target.reset();
       loadDoctors();
     };
 
-    document.getElementById('scheduleForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      await fetch('/api/schedule', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          doctor_id: form.get('doctorSelect'),
-          time: form.get('time'),
-        })
-      });
-      e.target.reset();
-      alert('Schedule set!');
-    };
-
-    function logout() {
-      localStorage.removeItem('token');
-      window.location.href = '/admin/login';
+    async function nextPatient(id) {
+      const res = await fetch(`/api/doctors/${id}/next`, { method: 'POST' });
+      const data = await res.json();
+      alert(data.next ? `Next Patient: ${data.next.name}` : 'Queue is empty');
+      loadDoctors();
+      loadPatientHistory(); // 👈 reload history after admitting
     }
 
-    loadHospitalInfo();
+    async function toggleStatus(id) {
+      const res = await fetch(`/api/admin/doctors/${id}/toggle`, { method: 'POST' });
+      const { active } = await res.json();
+      alert(`Doctor is now ${active ? 'Active ✅' : 'Inactive ❌'}`);
+      loadDoctors();
+    }
+
     loadDoctors();
+    loadPatientHistory();
+    setInterval(() => {
+      loadDoctors();
+      loadPatientHistory();
+    }, 5000);
   </script>
 </body>
 </html>
