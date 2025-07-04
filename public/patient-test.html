@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Hospital Payment - Razorpay Test</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+    .form-group { margin: 15px 0; }
+    label { display: block; margin-bottom: 5px; font-weight: bold; }
+    input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+    button { background: #007bff; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #0056b3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .doctor-info { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
+    .success-message { background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 15px 0; }
+    .error-message { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 15px 0; }
+  </style>
+</head>
+<body>
+  <h2>🏥 Book Appointment with Payment</h2>
+
+  <div class="form-group">
+    <label>Select Doctor:</label>
+    <select id="doctorSelect">
+      <option value="">Loading doctors...</option>
+    </select>
+  </div>
+
+  <div id="doctorInfo" class="doctor-info" style="display: none;"></div>
+
+  <form id="bookingForm">
+    <div class="form-group">
+      <label>Patient Name:</label>
+      <input type="text" id="patientName" required>
+    </div>
+
+    <div class="form-group">
+      <label>Age:</label>
+      <input type="number" id="age" min="1" max="120" required>
+    </div>
+
+    <div class="form-group">
+      <label>Gender:</label>
+      <select id="gender" required>
+        <option value="">Select Gender</option>
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Reason for Visit:</label>
+      <textarea id="reason" rows="3" required></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>Location:</label>
+      <input type="text" id="location" required>
+    </div>
+
+    <button type="submit" id="payButton">Pay & Book Appointment</button>
+  </form>
+
+  <div id="messages"></div>
+
+  <script>
+    let selectedDoctor = null;
+    let doctors = [];
+
+    // Load doctors on page load
+    async function loadDoctors() {
+      try {
+        const response = await fetch('/api/doctors');
+        const data = await response.json();
+        doctors = data.doctors;
+        
+        const select = document.getElementById('doctorSelect');
+        select.innerHTML = '<option value="">Select a doctor</option>';
+        
+        doctors.forEach(doctor => {
+          const option = document.createElement('option');
+          option.value = doctor._id;
+          option.textContent = `Dr. ${doctor.name} - ${doctor.specialization} (₹${doctor.fee})`;
+          select.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading doctors:', error);
+        showMessage('Error loading doctors', 'error');
+      }
+    }
+
+    // Handle doctor selection
+    document.getElementById('doctorSelect').addEventListener('change', function() {
+      const doctorId = this.value;
+      selectedDoctor = doctors.find(d => d._id === doctorId);
+      
+      if (selectedDoctor) {
+        document.getElementById('doctorInfo').style.display = 'block';
+        document.getElementById('doctorInfo').innerHTML = `
+          <h3>Dr. ${selectedDoctor.name}</h3>
+          <p><strong>Specialization:</strong> ${selectedDoctor.specialization}</p>
+          <p><strong>Consultation Fee:</strong> ₹${selectedDoctor.fee}</p>
+          <p><strong>Schedule:</strong> ${selectedDoctor.schedule?.join(', ') || 'Not specified'}</p>
+        `;
+      } else {
+        document.getElementById('doctorInfo').style.display = 'none';
+      }
+    });
+
+    // Handle form submission
+    document.getElementById('bookingForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      if (!selectedDoctor) {
+        showMessage('Please select a doctor', 'error');
+        return;
+      }
+
+      const patientData = {
+        name: document.getElementById('patientName').value,
+        age: parseInt(document.getElementById('age').value),
+        gender: document.getElementById('gender').value,
+        reason: document.getElementById('reason').value,
+        location: document.getElementById('location').value
+      };
+
+      try {
+        // Disable the button
+        const payButton = document.getElementById('payButton');
+        payButton.disabled = true;
+        payButton.textContent = 'Processing...';
+
+        // Step 1: Create Razorpay order
+        const orderResponse = await fetch(`/api/doctors/${selectedDoctor._id}/create-order`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(patientData)
+        });
+
+        const orderData = await orderResponse.json();
+
+        if (!orderData.success) {
+          throw new Error(orderData.message || 'Failed to create order');
+        }
+
+        // Step 2: Open Razorpay checkout
+        const options = {
+          key: orderData.data.razorpayKeyId,
+          amount: orderData.data.amount,
+          currency: orderData.data.currency,
+          name: 'ABC Hospital',
+          description: `Consultation with Dr. ${selectedDoctor.name}`,
+          order_id: orderData.data.orderId,
+          handler: async function(response) {
+            // Step 3: Verify payment
+            await verifyPayment(response, orderData.data);
+          },
+          prefill: {
+            name: patientData.name,
+            email: '', // Add email field if needed
+            contact: '' // Add contact field if needed
+          },
+          theme: {
+            color: '#007bff'
+          },
+          modal: {
+            ondismiss: function() {
+              payButton.disabled = false;
+              payButton.textContent = 'Pay & Book Appointment';
+              showMessage('Payment cancelled', 'error');
+            }
+          }
+        };
+
+        const rzp = new Razorpay(options);
+        rzp.open();
+
+      } catch (error) {
+        console.error('Error:', error);
+        showMessage(error.message, 'error');
+        
+        // Re-enable button
+        const payButton = document.getElementById('payButton');
+        payButton.disabled = false;
+        payButton.textContent = 'Pay & Book Appointment';
+      }
+    });
+
+    // Verify payment with backend
+    async function verifyPayment(razorpayResponse, orderData) {
+      try {
+        const verifyResponse = await fetch(`/api/doctors/${selectedDoctor._id}/verify-payment`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            razorpay_payment_id: razorpayResponse.razorpay_payment_id,
+            razorpay_order_id: razorpayResponse.razorpay_order_id,
+            razorpay_signature: razorpayResponse.razorpay_signature,
+            patientData: orderData.patientData,
+            transactionId: orderData.transactionId
+          })
+        });
+
+        const verifyData = await verifyResponse.json();
+
+        if (verifyData.success) {
+          showMessage(`
+            <h3>✅ Payment Successful!</h3>
+            <p><strong>Transaction ID:</strong> ${verifyData.data.transactionId}</p>
+            <p><strong>Queue Position:</strong> ${verifyData.data.queuePosition}</p>
+            <p><strong>Estimated Wait Time:</strong> ${verifyData.data.estimatedWaitTime}</p>
+            <p><strong>Amount Paid:</strong> ₹${verifyData.data.amount}</p>
+            <p>Your appointment has been booked successfully!</p>
+          `, 'success');
+          
+          // Reset form
+          document.getElementById('bookingForm').reset();
+          document.getElementById('doctorSelect').value = '';
+          document.getElementById('doctorInfo').style.display = 'none';
+          selectedDoctor = null;
+        } else {
+          throw new Error(verifyData.message || 'Payment verification failed');
+        }
+      } catch (error) {
+        console.error('Verification error:', error);
+        showMessage('Payment verification failed: ' + error.message, 'error');
+      } finally {
+        // Re-enable button
+        const payButton = document.getElementById('payButton');
+        payButton.disabled = false;
+        payButton.textContent = 'Pay & Book Appointment';
+      }
+    }
+
+    // Show messages
+    function showMessage(message, type) {
+      const messagesDiv = document.getElementById('messages');
+      const messageClass = type === 'error' ? 'error-message' : 'success-message';
+      messagesDiv.innerHTML = `<div class="${messageClass}">${message}</div>`;
+      
+      // Auto-hide after 10 seconds for success messages
+      if (type === 'success') {
+        setTimeout(() => {
+          messagesDiv.innerHTML = '';
+        }, 10000);
+      }
+    }
+
+    // Load doctors when page loads
+    loadDoctors();
+  </script>
+</body>
+</html>
