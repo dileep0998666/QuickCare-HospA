@@ -16,6 +16,7 @@
     <form id="addDoctorForm">
       <input name="name" placeholder="Doctor Name" required />
       <input name="specialization" placeholder="Specialization" required />
+      <input name="fee" type="number" placeholder="Consultation Fee (₹)" required />
       <input name="schedule" placeholder="Schedule (comma-separated)" required />
       <button type="submit">Add Doctor</button>
     </form>
@@ -33,45 +34,43 @@
 
   <script>
     async function loadDoctors() {
-  const res = await fetch('/api/admin/doctors');
-  const { doctors } = await res.json();
-  const list = document.getElementById('doctorList');
+      const res = await fetch('/api/admin/doctors');
+      const { doctors } = await res.json();
+      const list = document.getElementById('doctorList');
 
-  // Save scroll position (optional)
-  const scrollPos = list.scrollTop;
+      const scrollPos = list.scrollTop;
+      const fragment = document.createDocumentFragment();
 
-  // Clear and rebuild the list (with less flicker)
-  const fragment = document.createDocumentFragment();
+      for (const doc of doctors) {
+        const q = await fetch(`/api/doctors/${doc._id}/queue`);
+        const { queue } = await q.json();
 
-  for (const doc of doctors) {
-    const q = await fetch(`/api/doctors/${doc._id}/queue`);
-    const { queue } = await q.json();
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <b>${doc.name}</b> (${doc.specialization}) – 
+          <i>${doc.active ? '✅ Active' : '❌ Not Active'}</i><br>
+          Fee: ₹<span id="fee-${doc._id}">${doc.fee ?? 'Not Set'}</span><br>
+          <input type="number" id="feeInput-${doc._id}" placeholder="Set Fee (₹)" style="width: 100px;">
+          <button onclick="setFee('${doc._id}')">Update Fee</button><br>
+          Schedule: ${doc.schedule.join(', ') || 'None'}<br>
+          Queue (${queue.length}):<br>
+          <ul>
+            ${queue.map(p => `
+              <li>${p.name} (${p.gender}, ${p.reason}, Age: ${p.age}, From: ${p.location})</li>
+            `).join('')}
+          </ul>
+          <button onclick="nextPatient('${doc._id}')">Next Patient</button>
+          <button onclick="toggleStatus('${doc._id}')">
+            Set ${doc.active ? 'Inactive' : 'Active'}
+          </button><br><br>
+        `;
+        fragment.appendChild(li);
+      }
 
-    const li = document.createElement('li');
-    li.innerHTML = `
-      <b>${doc.name}</b> (${doc.specialization}) – 
-      <i>${doc.active ? '✅ Active' : '❌ Not Active'}</i><br>
-      Schedule: ${doc.schedule.join(', ') || 'None'}<br>
-      Queue (${queue.length}):<br>
-      <ul>
-        ${queue.map(p => `
-          <li>${p.name} (${p.gender}, ${p.reason}, Age: ${p.age}, From: ${p.location})</li>
-        `).join('')}
-      </ul>
-      <button onclick="nextPatient('${doc._id}')">Next Patient</button>
-      <button onclick="toggleStatus('${doc._id}')">
-        Set ${doc.active ? 'Inactive' : 'Active'}
-      </button><br><br>
-    `;
-    fragment.appendChild(li);
-  }
-
-  list.innerHTML = '';
-  list.appendChild(fragment);
-
-  // Restore scroll (optional)
-  list.scrollTop = scrollPos;
-}
+      list.innerHTML = '';
+      list.appendChild(fragment);
+      list.scrollTop = scrollPos;
+    }
 
     async function loadPatientHistory() {
       const res = await fetch('/api/admin/patients');
@@ -92,6 +91,7 @@
       const body = {
         name: f.get('name'),
         specialization: f.get('specialization'),
+        fee: parseInt(f.get('fee')),
         schedule: f.get('schedule').split(',').map(s => s.trim())
       };
 
@@ -110,7 +110,7 @@
       const data = await res.json();
       alert(data.next ? `Next Patient: ${data.next.name}` : 'Queue is empty');
       loadDoctors();
-      loadPatientHistory(); // 👈 reload history after admitting
+      loadPatientHistory();
     }
 
     async function toggleStatus(id) {
@@ -118,6 +118,31 @@
       const { active } = await res.json();
       alert(`Doctor is now ${active ? 'Active ✅' : 'Inactive ❌'}`);
       loadDoctors();
+    }
+
+    async function setFee(doctorId) {
+      const input = document.getElementById(`feeInput-${doctorId}`);
+      const newFee = parseInt(input.value);
+
+      if (isNaN(newFee) || newFee <= 0) {
+        alert("Please enter a valid fee.");
+        return;
+      }
+
+      const res = await fetch(`/api/admin/doctors/${doctorId}/fee`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fee: newFee })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        document.getElementById(`fee-${doctorId}`).textContent = newFee;
+        input.value = '';
+        alert("Fee updated successfully!");
+      } else {
+        alert("Failed to update fee.");
+      }
     }
 
     loadDoctors();

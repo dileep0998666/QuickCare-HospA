@@ -601,6 +601,29 @@ app.post("/api/admin/doctors/:id/toggle", async (req, res) => {
   res.json({ active: doc.active })
 })
 
+// Accept POST too (for compatibility with frontend)
+app.post("/api/admin/doctors/:id/fee", async (req, res) => {
+  try {
+    const { fee, currency = "INR" } = req.body
+
+    if (!fee || fee < 0) {
+      return res.status(400).json({ error: "Invalid fee amount" })
+    }
+
+    const doc = await Doctor.findByIdAndUpdate(
+      req.params.id,
+      { fee: Number(fee), currency },
+      { new: true }
+    )
+
+    if (!doc) return res.status(404).json({ error: "Doctor not found" })
+
+    res.json({ success: true, doctor: doc })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Update doctor fee
 app.put("/api/admin/doctors/:id/fee", async (req, res) => {
   try {
