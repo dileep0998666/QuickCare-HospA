@@ -1,13 +1,16 @@
 name: Keep Render Awake
 
 on:
+  push:
+    branches: ["main"]   # TEMPORARY
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping app
+      - name: Ping Render App
         run: |
-          curl -L https://quickcare-hospa.onrender.com/admin
+          curl -L https://YOUR-APP.onrender.com/health
